@@ -298,6 +298,9 @@ vector<BLEdevice> devices;
                         boolean result = process_data(pos - 40,(char *)Service_data.c_str(),d[0].extract);
                       }
                       return true;
+                   } else if (strcmp(d[4].extract, "0499") == 0) { // RuuviTag BLE sensor
+                      boolean result = process_data_ruuvitag((char *)Service_data.c_str(),d[0].extract);
+                      return true;
                    }
                 }
               }
@@ -463,6 +466,54 @@ boolean process_data(int offset, char * rest_data, char * mac_adress){
     }
     pub((char *)mactopic.c_str(),BLEdata);
     return true;
+}
+
+boolean process_data_ruuvitag(char * rest_data, char * mac_adress) {
+
+  struct decompose d[5] = {{"frm",0,2,false},{"hum",2,2,false},{"tem",4,4,false},{"hpa",8,4,false},{"bat",24,4,false}};
+  double value_dbl = 0;
+  char data[2];
+
+  trc(F("Creating BLE buffer"));
+  StaticJsonBuffer<JSON_MSG_BUFFER> jsonBuffer;
+  JsonObject& BLEdata = jsonBuffer.createObject();
+  trc("Process Ruuvitag Data");
+  trc("rest_data");
+  trc(rest_data);
+
+  for(int i =0; i<5; i++)
+    {
+      extract_char(rest_data,d[i].extract,d[i].start, d[i].len ,d[i].reverse, false);
+      value_dbl = double(strtol(d[i].extract, NULL, 16));
+      switch (i) {
+        case 0:
+          if ((int)strtol(d[i].extract, NULL, 16) != 3) return false;   // Data format must be raw = 3. Compare as INT
+          break;
+        case 1:       // Humidity is value divided by 2
+          value_dbl /= 2;
+          break;
+        case 2:       // Temperature. First byte is full degrees and second byte partial degrees
+          extract_char(d[i].extract,data,0, 2 ,false, false);
+          value_dbl = double(strtol(data, NULL, 16));
+          extract_char(d[i].extract,data,2, 2 ,false, false);
+          value_dbl = value_dbl + (double(strtol(data, NULL, 16)) / 100); // Sum up full and partial degrees
+          break;
+        case 3:     // Air pressure. Measured with 2 significant and 500 hPa offset
+          value_dbl = value_dbl / 100 + 500;
+          break;
+        case 4:     // Battery voltage. Measured with 3 significant
+          value_dbl /= 1000;
+          break;
+      }
+      trc(d[i].subject);
+      trc(value_dbl);
+      BLEdata.set(d[i].subject, value_dbl);
+    }
+    
+  String mactopic(mac_adress);
+  mactopic = subjectBTtoMQTT + mactopic;
+  pub((char *)mactopic.c_str(),BLEdata);
+  return true;
 }
 
 #ifdef subjectHomePresence
